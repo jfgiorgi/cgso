@@ -9,43 +9,13 @@
 #include <unistd.h>
 #include <netdb.h>
 
+// original code: https://gist.github.com/marten-seemann/36a2558b48d060d063ecb3b005f47320
+// updated to IPv4/IPv6
 
 #define PORT 6121
 #define BUFFER_SIZE 4096
 
-void DumpHex(const char *label, const void* data, size_t size) {
-    printf("%s:\n",label);
-	char ascii[17];
-	size_t i, j;
-	ascii[16] = '\0';
-	for (i = 0; i < size; ++i) {
-		printf("%02X ", ((unsigned char*)data)[i]);
-		if (((unsigned char*)data)[i] >= ' ' && ((unsigned char*)data)[i] <= '~') {
-			ascii[i % 16] = ((unsigned char*)data)[i];
-		} else {
-			ascii[i % 16] = '.';
-		}
-		if ((i+1) % 8 == 0 || i+1 == size) {
-			printf(" ");
-			if ((i+1) % 16 == 0) {
-				printf("|  %s \n", ascii);
-			} else if (i+1 == size) {
-				ascii[(i+1) % 16] = '\0';
-				if ((i+1) % 16 <= 8) {
-					printf(" ");
-				}
-				for (j = (i+1) % 16; j < 16; ++j) {
-					printf("   ");
-				}
-				printf("|  %s \n", ascii);
-			}
-		}
-	}
-}
 ssize_t send_with_fallback(int sockfd, const struct sockaddr_in6 *addr, const char *buffer, size_t len) {
-
-    // DumpHex("addr",addr,sizeof(struct sockaddr_in6));
-    // DumpHex("buffer",buffer,len);
 
     struct msghdr msg = {0};
     struct iovec iov = {(char *) buffer, len};  // Cast away the const
@@ -60,18 +30,16 @@ ssize_t send_with_fallback(int sockfd, const struct sockaddr_in6 *addr, const ch
     // GSO setup
     msg.msg_control = cmsg_buffer;
     msg.msg_controllen = sizeof(cmsg_buffer);
-
-    __builtin_dump_struct(&msg, &printf);
-
+ 
     cmsg = CMSG_FIRSTHDR(&msg);
     cmsg->cmsg_level = IPPROTO_UDP;
     cmsg->cmsg_type = UDP_SEGMENT;
     cmsg->cmsg_len = CMSG_LEN(sizeof(uint16_t));
-    *(uint16_t *)CMSG_DATA(cmsg) = 6;  // GSO segment size
+    *(uint16_t *)CMSG_DATA(cmsg) = 1200;  // GSO segment size
 
 	char astring[INET6_ADDRSTRLEN];
     inet_ntop(addr->sin6_family, &(addr->sin6_addr), astring, INET6_ADDRSTRLEN);
-    printf("Sending with GSO to %s...\n",astring);
+    printf("Sending with GSO to [%s]:%d...\n",astring,ntohs(addr->sin6_port));
     ssize_t ret = sendmsg(sockfd, &msg, 0);
     if (ret == -1 && (errno == EIO || errno == 22)) {
         printf("GSO failed. Attempting without GSO...\n");
@@ -80,11 +48,12 @@ ssize_t send_with_fallback(int sockfd, const struct sockaddr_in6 *addr, const ch
         ret = sendmsg(sockfd, &msg, 0);
         if (ret == -1) {
             printf("Fallback also failed.\n");
+        } else {
+            printf("Message sent without GSO.\n");    
         }
     } else {
         printf("Message sent with GSO.\n");
     }
-    printf("ret= %zd, errno =%d\n",ret,errno);
     return ret;
 }
 
@@ -109,12 +78,14 @@ int main(int argc, char **argv) {
 
     // If enabled, the fallback will NOT work.
     // Comment these lines to make it work.
-    int val = 1;
-    if (setsockopt(sockfd, IPPROTO_UDP, UDP_SEGMENT, &val, sizeof(val)) < 0) {
-        perror("setsockopt UDP_SEGMENT");
-        close(sockfd);
-        return 1;
-    }
+    // int val = 1;
+    // int r = setsockopt(sockfd, IPPROTO_UDP, UDP_SEGMENT, &val, sizeof(val));
+    // printf("setsockopt UDP_SEGMENT: val,r=%d,%d\n",val,r);
+    // if ( r < 0) {
+    //     perror("setsockopt UDP_SEGMENT");
+    //     close(sockfd);
+    //     return 1;
+    // }
 
     if (argc <= 1) {
         perror("missing argument");    
@@ -143,7 +114,7 @@ int main(int argc, char **argv) {
     remote_address.sin6_port = htons(PORT);
     remote_address.sin6_addr = ((struct sockaddr_in6 *)res->ai_addr)->sin6_addr;
 
-    __builtin_dump_struct(&remote_address, &printf);
+    //__builtin_dump_struct(&remote_address, &printf);
 
     char buffer[BUFFER_SIZE] = "Hello, World!";
     if (send_with_fallback(sockfd, &remote_address, buffer, strlen(buffer)) == -1) {
