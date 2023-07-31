@@ -13,7 +13,8 @@
 #define PORT 6121
 #define BUFFER_SIZE 4096
 
-void DumpHex(const void* data, size_t size) {
+void DumpHex(const char *label, const void* data, size_t size) {
+    printf("%s:\n",label);
 	char ascii[17];
 	size_t i, j;
 	ascii[16] = '\0';
@@ -43,7 +44,8 @@ void DumpHex(const void* data, size_t size) {
 }
 ssize_t send_with_fallback(int sockfd, const struct sockaddr_in6 *addr, const char *buffer, size_t len) {
 
-    //DumpHex(addr,sizeof(struct sockaddr_in6));
+    // DumpHex("addr",addr,sizeof(struct sockaddr_in6));
+    // DumpHex("buffer",buffer,len);
 
     struct msghdr msg = {0};
     struct iovec iov = {(char *) buffer, len};  // Cast away the const
@@ -58,6 +60,8 @@ ssize_t send_with_fallback(int sockfd, const struct sockaddr_in6 *addr, const ch
     // GSO setup
     msg.msg_control = cmsg_buffer;
     msg.msg_controllen = sizeof(cmsg_buffer);
+
+    __builtin_dump_struct(&msg, &printf);
 
     cmsg = CMSG_FIRSTHDR(&msg);
     cmsg->cmsg_level = IPPROTO_UDP;
@@ -122,8 +126,8 @@ int main(int argc, char **argv) {
 
     memset(&hint, '\0', sizeof hint);
 
-    hint.ai_family = PF_UNSPEC;
-    hint.ai_flags = AI_NUMERICHOST;
+    hint.ai_family = AF_INET6;
+    hint.ai_flags = AI_NUMERICHOST | AI_V4MAPPED;
 
     ret = getaddrinfo(argv[1], NULL, &hint, &res);
     if (ret) {
@@ -132,15 +136,15 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-
     // Send a message using GSO, with fallback
     struct sockaddr_in6 remote_address;
     memset(&remote_address, 0, sizeof(remote_address));
-    remote_address.sin6_family = res->ai_family;
+    remote_address.sin6_family = AF_INET6;
     remote_address.sin6_port = htons(PORT);
-    //inet_pton(AF_INET, "8.8.8.8", &remote_address.sin_addr);
-    inet_pton(res->ai_family, argv[1], &remote_address.sin6_addr);
-    
+    remote_address.sin6_addr = ((struct sockaddr_in6 *)res->ai_addr)->sin6_addr;
+
+    __builtin_dump_struct(&remote_address, &printf);
+
     char buffer[BUFFER_SIZE] = "Hello, World!";
     if (send_with_fallback(sockfd, &remote_address, buffer, strlen(buffer)) == -1) {
         perror("send_with_fallback");
